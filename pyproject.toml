@@ -1,0 +1,20 @@
+[project]
+name = "ai-austin-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "langchain>=0.3.25",
+    "langchain-chroma>=0.2.4",
+    "langchain-ollama>=0.3.3",
+    "langchain-google-genai>=0.0.6",
+    "python-dotenv>=1.0.0",
+    "beautifulsoup4>=4.12.2",
+    "requests>=2.31.0",
+    "loguru>=0.7.2",
+    "pandas>=2.2.0",
+    "openpyxl>=3.1.2",
+    "streamlit>=1.32.0",
+    "watchdog>=6.0.0",
+]

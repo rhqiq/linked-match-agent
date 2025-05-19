@@ -1,0 +1,16 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+data/all_profiles.json
+data/profiles/*
+chroma_db/*
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Environment variables - keep API keys private
+.env
