@@ -108,139 +108,76 @@ def parse_candidate_results(result_text):
     candidates = []
     
     try:
-        # Try to extract candidate sections using a more flexible pattern
-        # This pattern looks for numbered candidates (1., 2., etc.) followed by content until the next candidate or end
-        candidate_sections = re.split(r'\n\s*\d+\.', result_text)
+        # Extract candidate sections using regex pattern for numbered items
+        # This pattern looks for lines starting with a number followed by a period (1., 2., etc.)
+        name_pattern = r'(?:^|\n)(\d+)[\.:\)]\s+([^(]+)(?:\(([^)]+)\))?'
         
-        # The first section is usually an introduction or empty, so skip it if it doesn't contain candidate info
-        if not re.search(r'match score|skill|contact', candidate_sections[0], re.IGNORECASE):
-            candidate_sections = candidate_sections[1:]
+        # Find all candidates first to know the total count
+        all_matches = list(re.finditer(name_pattern, result_text))
+        total_matches = len(all_matches)
+        
+        # Process each candidate match
+        for index, match in enumerate(all_matches):
+            # Extract basic info
+            rank = match.group(1)
+            name = match.group(2).strip() if match.group(2) else "Unknown"
+            title = match.group(3).strip() if match.group(3) else ""
             
-        # If we found candidate sections
-        if candidate_sections and len(candidate_sections) > 0:
-            for i, section in enumerate(candidate_sections):
-                # Skip empty sections
-                if not section.strip():
-                    continue
-                    
-                # Add the section number back for parsing
-                section_text = f"{i+1}. {section.strip()}"
-                
-                # Extract basic info
-                name_match = re.search(r'^(\d+)\.\s*([^(]*)(?:\(([^)]*)\))?', section_text)
-                if not name_match:
-                    continue
-                    
-                rank = name_match.group(1)
-                name = name_match.group(2).strip() if name_match.group(2) else "Unknown"
-                title = name_match.group(3).strip() if name_match.group(3) else ""
-                
-                # Extract match score - look for any number followed by %
-                score_match = re.search(r'(\d+)%', section_text)
-                score = score_match.group(1) if score_match else "N/A"
-                
-                # Extract explanation - look for anything after "explanation" or "why" until the next section
-                explanation_pattern = r'(?:explanation|why|reason):\s*(.*?)(?=\n\s*(?:key skill|skill|contact|match score)|$)'
-                explanation_match = re.search(explanation_pattern, section_text, re.IGNORECASE | re.DOTALL)
-                explanation = explanation_match.group(1).strip() if explanation_match else "No explanation provided"
-                explanation = re.sub(r'\n+', ' ', explanation)  # Clean up newlines
-                
-                # Extract skills - look for anything after "skills" until the next section
-                skills_pattern = r'(?:key skill|skill|relevant skill)s?:\s*(.*?)(?=\n\s*(?:contact|match score|explanation|why)|$)'
-                skills_match = re.search(skills_pattern, section_text, re.IGNORECASE | re.DOTALL)
-                skills_text = skills_match.group(1).strip() if skills_match else ""
-                skills_text = re.sub(r'\n+', ' ', skills_text)  # Clean up newlines
-                # Split skills by commas, bullets, or similar delimiters
-                skills_list = [s.strip() for s in re.split(r',|\n|•|-', skills_text) if s.strip()]
-                
-                # Extract contact info - look for anything after "contact" until the end or next section
-                # Make sure we don't capture SUMMARY text in the contact information
-                contact_pattern = r'contact(?:\s+information)?:\s*(.*?)(?=\n\s*(?:key skill|skill|match score|explanation|why|summary|SUMMARY:)|\n\n|\Z)'
-                contact_match = re.search(contact_pattern, section_text, re.IGNORECASE | re.DOTALL)
-                contact = contact_match.group(1).strip() if contact_match else "No contact information available"
-                contact = re.sub(r'\n+', ' ', contact)  # Clean up newlines
-                
-                # Clean up contact info - remove any SUMMARY text that might have been captured
-                contact = re.sub(r'(?i)SUMMARY:.*$', '', contact).strip()
-                
-                # Add to candidates list
-                candidates.append({
-                    "rank": rank,
-                    "name": name,
-                    "title": title,
-                    "score": score,
-                    "explanation": explanation,
-                    "skills": skills_list,
-                    "contact": contact
-                })
-                
-        # If no candidates found with the section approach, try the original regex approach
-        if not candidates:
-            # Original implementation as fallback
-            # Regular expression patterns - improved to be more flexible
-            name_pattern = r'(?:^|\n)(\d+)[\.:\)]\s+([^(]+)(?:\(([^)]+)\))?'
+            # Determine the section text for this candidate
+            # (from the end of this match to the start of the next match or end of text)
+            start_pos = match.end()
+            
+            # Find the next candidate or the end of the text
+            if index < total_matches - 1:
+                # There is another candidate after this one
+                next_match = all_matches[index + 1]
+                end_pos = next_match.start()
+            else:
+                # This is the last candidate
+                end_pos = len(result_text)
+            
+            # Extract the candidate section text
+            section_text = result_text[start_pos:end_pos]
+            
+            # Extract match score - look for any number followed by %
             score_pattern = r'(?:Match score|Score):\s*(\d+)%'
-            explanation_pattern = r'(?:Explanation|Why|Reason):\s*([^\n]+(?:\n[^\n]+)*?)(?:\n\n|\n(?=[A-Z]|Key|Match|Contact)|\Z)'
-            skills_pattern = r'(?:Key skills|Skills|Relevant skills):\s*([^\n]+(?:\n[^\n]+)*?)(?:\n\n|\n(?=[A-Z]|Match|Contact)|\Z)'
-            contact_pattern = r'Contact(?:\s+information)?:\s*([^\n]+(?:\n[^\n]+)*?)(?:\n\n|\n(?=[A-Z]|[0-9])|\Z)'
+            score_match = re.search(score_pattern, section_text)
+            score = score_match.group(1) if score_match else "N/A"
             
-            # Find all candidates
-            current_pos = 0
-            while True:
-                # Find the next candidate's name
-                name_match = re.search(name_pattern, result_text[current_pos:])
-                if not name_match:
-                    break
-                    
-                rank = name_match.group(1)
-                name = name_match.group(2).strip()
-                title = name_match.group(3).strip() if name_match.group(3) else ""
-                
-                # Update the current position
-                start_pos = current_pos + name_match.end()
-                
-                # Look for the next candidate or the end of the text
-                next_match = re.search(name_pattern, result_text[start_pos:])
-                end_pos = start_pos + next_match.start() if next_match else len(result_text)
-                
-                # Extract the current candidate's section
-                candidate_text = result_text[start_pos:end_pos]
-                
-                # Extract details with improved pattern matching
-                score_match = re.search(score_pattern, candidate_text)
-                score = score_match.group(1) if score_match else "N/A"
-                
-                explanation_match = re.search(explanation_pattern, candidate_text)
-                explanation = explanation_match.group(1).strip() if explanation_match else "No explanation provided"
-                explanation = re.sub(r'\n+', ' ', explanation)
-                
-                skills_match = re.search(skills_pattern, candidate_text)
-                skills_text = skills_match.group(1).strip() if skills_match else ""
-                skills_text = re.sub(r'\n+', ' ', skills_text)
-                skills_list = [s.strip() for s in re.split(r',|\n|•|-', skills_text) if s.strip()]
-                
-                # Updated pattern to avoid capturing SUMMARY text in the contact information
-                contact_pattern = r'Contact(?:\s+information)?:\s*([^\n]+(?:\n[^\n]+)*?)(?:\n\n|\n(?=[A-Z]|[0-9]|Summary|SUMMARY)|\Z)'
-                contact_match = re.search(contact_pattern, candidate_text)
-                contact = contact_match.group(1).strip() if contact_match else "No contact information available"
-                contact = re.sub(r'\n+', ' ', contact)
-                
-                # Clean up contact info - remove any SUMMARY text that might have been captured
-                contact = re.sub(r'(?i)SUMMARY:.*$', '', contact).strip()
-                
-                # Add to candidates list
-                candidates.append({
-                    "rank": rank,
-                    "name": name,
-                    "title": title,
-                    "score": score,
-                    "explanation": explanation,
-                    "skills": skills_list,
-                    "contact": contact
-                })
-                
-                # Update position for next iteration
-                current_pos = end_pos
+            # Extract explanation
+            explanation_pattern = r'(?:Explanation|Why|Reason)(?:\s+this\s+candidate\s+matches)?:\s*(.+?)(?=\n\s*(?:Key skill|Skill|Contact|Match score)|$)'
+            explanation_match = re.search(explanation_pattern, section_text, re.IGNORECASE | re.DOTALL)
+            explanation = explanation_match.group(1).strip() if explanation_match else "No explanation provided"
+            explanation = re.sub(r'\n+', ' ', explanation)  # Clean up newlines
+            
+            # Extract skills
+            skills_pattern = r'(?:Key skill|Skill|Relevant skill)s?:\s*(.+?)(?=\n\s*(?:Contact|Match score|Explanation|Why)|$)'
+            skills_match = re.search(skills_pattern, section_text, re.IGNORECASE | re.DOTALL)
+            skills_text = skills_match.group(1).strip() if skills_match else ""
+            skills_text = re.sub(r'\n+', ' ', skills_text)  # Clean up newlines
+            # Split skills by commas, bullets, or similar delimiters
+            skills_list = [s.strip() for s in re.split(r',|\n|•|-', skills_text) if s.strip()]
+            
+            # Make sure we don't capture SUMMARY text in the contact information
+            contact_pattern = r'Contact(?:\s+information)?:\s*(.*?)(?=\n\s*(?:Key skill|Skill|Match score|Explanation|Why|Summary|SUMMARY:)|\n\n|\Z)'
+            contact_match = re.search(contact_pattern, section_text, re.IGNORECASE | re.DOTALL)
+            contact = contact_match.group(1).strip() if contact_match else "No contact information available"
+            contact = re.sub(r'\n+', ' ', contact)  # Clean up newlines
+            
+            # Clean up contact info - remove any SUMMARY text that might have been captured
+            contact = re.sub(r'(?i)SUMMARY:.*$', '', contact).strip()
+            
+            # Add to candidates list
+            candidates.append({
+                "rank": rank,
+                "name": name,
+                "title": title,
+                "score": score,
+                "explanation": explanation,
+                "skills": skills_list,
+                "contact": contact
+            })
+    
     except Exception as e:
         st.error(f"Error parsing candidates: {e}")
         return [], ""
