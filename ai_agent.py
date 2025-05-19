@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from loguru import logger
 from pathlib import Path
 from typing import List, Dict, Any
+import re
 
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
@@ -17,6 +18,9 @@ from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
 from langchain.schema.document import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+# Import Pydantic models
+from models import Profile, Experience, CandidateMatch, SearchResponse
 
 # Create data directories if they don't exist
 DATA_DIR = Path("data")
@@ -129,20 +133,42 @@ def extract_profile_data(html_content, profile_info):
     try:
         exp_sections = soup.select('div.pvs-list__outer-container ul.pvs-list li.artdeco-list__item')
         for exp in exp_sections:
-            job_title_elem = exp.select_one('span.mr1.t-bold')
-            company_elem = exp.select_one('span.t-14.t-normal')
-            duration_elem = exp.select_one('span.t-14.t-normal.t-black--light')
+            # Get the raw HTML content of the experience item
+            item_html = str(exp)
             
-            if job_title_elem and company_elem:
-                job_title = job_title_elem.text.strip()
-                company = company_elem.text.strip()
-                duration = duration_elem.text.strip() if duration_elem else ""
-                
-                experience.append({
-                    "title": job_title,
-                    "company": company,
-                    "duration": duration
-                })
+            # Extract title from the strong tag
+            title_elem = exp.find('strong')
+            title = title_elem.text.strip() if title_elem else ""
+            
+            # Extract company and location - it appears after the strong tag and before <br>
+            company = ""
+            company_loc_text = ""
+            if title_elem and " at " in item_html:
+                # Get the text after the strong tag closing and before <br>
+                after_title = item_html.split('</strong>', 1)[1].split('<br>', 1)[0]
+                if " at " in after_title:
+                    company_loc_text = after_title.split(" at ", 1)[1].strip()
+                    # Extract company (handle format like "Company, Location")
+                    if "," in company_loc_text:
+                        company = company_loc_text.split(",")[0].strip()
+                    else:
+                        company = company_loc_text
+            
+            # Extract duration
+            duration_elem = exp.find('small')
+            duration = duration_elem.text.strip() if duration_elem else ""
+            
+            # Extract description
+            description_elem = exp.find('p')
+            description = description_elem.text.strip() if description_elem else ""
+            
+            # Add to experience list
+            experience.append({
+                "title": title,
+                "company": company,
+                "duration": duration,
+                "description": description
+            })
     except (AttributeError, TypeError):
         pass
     
@@ -205,6 +231,169 @@ def scrape_profiles():
     logger.info(f"Completed scraping {len(processed_data)} profiles")
     logger.info(f"All profile data saved to {all_profiles_file}")
 
+def extract_experience_and_skills():
+    """
+    Extract experience and skills data from HTML profiles and update JSON files
+    Also stores raw HTML as fallback for more complex extraction needs
+    """
+    logger.info("Starting extraction of experience and skills from HTML profiles")
+    
+    # Ensure the profiles directory exists
+    if not PROFILES_DIR.exists():
+        logger.error(f"Profiles directory not found at {PROFILES_DIR}")
+        return 0
+    
+    # Get all HTML files in the profiles directory
+    html_files = list(PROFILES_DIR.glob("*.html"))
+    logger.info(f"Found {len(html_files)} HTML profile files")
+    
+    # Load all profiles from JSON to update later
+    all_profiles_file = DATA_DIR / "all_profiles.json"
+    all_profiles = []
+    if all_profiles_file.exists():
+        try:
+            with open(all_profiles_file, "r", encoding="utf-8") as file:
+                all_profiles = json.load(file)
+            logger.info(f"Loaded {len(all_profiles)} profiles from {all_profiles_file}")
+        except Exception as e:
+            logger.error(f"Error loading all profiles: {e}")
+            all_profiles = []
+    
+    profiles_updated = 0
+    
+    # Process each HTML file
+    for html_file in html_files:
+        profile_name = html_file.stem  # Get filename without extension
+        json_file = PROFILES_DIR / f"{profile_name}.json"
+        
+        # Skip if JSON file doesn't exist
+        if not json_file.exists():
+            logger.warning(f"JSON file not found for {profile_name}, skipping")
+            continue
+        
+        try:
+            # Read HTML content
+            with open(html_file, "r", encoding="utf-8") as file:
+                html_content = file.read()
+            
+            # Parse HTML
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Extract experience - find all sections and identify the Experience section
+            experience = []
+            sections = soup.find_all('div', class_='section')
+            for section in sections:
+                # Check if this section is the Experience section
+                h2_elem = section.find('h2')
+                if h2_elem and 'Experience' in h2_elem.text:
+                    # Found the Experience section
+                    exp_items = section.find_all('div', class_='experience-item')
+                    for item in exp_items:
+                        # Get the raw HTML content of the experience item
+                        item_html = str(item)
+                        
+                        # Extract title from the strong tag
+                        title_elem = item.find('strong')
+                        title = title_elem.text.strip() if title_elem else ""
+                        
+                        # Extract company and location - it appears after the strong tag and before <br>
+                        company = ""
+                        company_loc_text = ""
+                        if title_elem and " at " in item_html:
+                            # Get the text after the strong tag closing and before <br>
+                            after_title = item_html.split('</strong>', 1)[1].split('<br>', 1)[0]
+                            if " at " in after_title:
+                                company_loc_text = after_title.split(" at ", 1)[1].strip()
+                                # Extract company (handle format like "Company, Location")
+                                if "," in company_loc_text:
+                                    company = company_loc_text.split(",")[0].strip()
+                                else:
+                                    company = company_loc_text
+                        
+                        # Extract duration
+                        duration_elem = item.find('small')
+                        duration = duration_elem.text.strip() if duration_elem else ""
+                        
+                        # Extract description
+                        description_elem = item.find('p')
+                        description = description_elem.text.strip() if description_elem else ""
+                        
+                        # Add to experience list
+                        experience.append({
+                            "title": title,
+                            "company": company,
+                            "duration": duration,
+                            "description": description
+                        })
+                    # Found and processed Experience section, no need to continue
+                    break
+            
+            # Extract skills - find all sections and identify the Skills section
+            skills = []
+            for section in sections:
+                # Check if this section is the Skills section
+                h2_elem = section.find('h2')
+                if h2_elem and 'Skills' in h2_elem.text:
+                    # Found the Skills section
+                    skills_list = section.find('ul')
+                    if skills_list:
+                        for skill_item in skills_list.find_all('li'):
+                            skill_text = skill_item.text.strip()
+                            # Extract skill name (remove endorsements count)
+                            skill_name = skill_text
+                            if "(" in skill_text:
+                                skill_name = skill_text.split("(")[0].strip()
+                            skills.append(skill_name)
+                    # Found and processed Skills section, no need to continue
+                    break
+            
+            # Update individual JSON file
+            profile_data = {}
+            try:
+                with open(json_file, "r", encoding="utf-8") as file:
+                    profile_data = json.load(file)
+            except Exception as e:
+                logger.error(f"Error reading JSON file {json_file}: {e}")
+                continue
+            
+            # Update experience and skills
+            profile_data["experience"] = experience
+            profile_data["skills"] = skills
+            
+            # Store raw HTML as fallback for more complex extraction needs
+            profile_data["raw_html"] = html_content
+            
+            # Save updated JSON
+            with open(json_file, "w", encoding="utf-8") as file:
+                json.dump(profile_data, file, indent=2)
+            
+            # Update in all_profiles
+            for i, profile in enumerate(all_profiles):
+                if profile.get("name") == profile_data.get("name"):
+                    all_profiles[i]["experience"] = experience
+                    all_profiles[i]["skills"] = skills
+                    all_profiles[i]["raw_html"] = html_content
+                    break
+            
+            profiles_updated += 1
+            logger.info(f"Updated profile for {profile_name}")
+            
+        except Exception as e:
+            logger.error(f"Error processing {profile_name}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    # Save updated all_profiles.json
+    try:
+        with open(all_profiles_file, "w", encoding="utf-8") as file:
+            json.dump(all_profiles, file, indent=2)
+        logger.info(f"Updated all_profiles.json with experience and skills data")
+    except Exception as e:
+        logger.error(f"Error saving all_profiles.json: {e}")
+    
+    logger.info(f"Completed! Updated {profiles_updated} profiles out of {len(html_files)} HTML files")
+    return profiles_updated
+
 ###################
 # VECTOR DATABASE #
 ###################
@@ -230,28 +419,43 @@ def process_profile_to_text(profile: Dict[Any, Any]) -> str:
     # Basic information
     texts.append(f"Name: {profile.get('name', 'Unknown')}")
     texts.append(f"Title: {profile.get('headline', 'Unknown')}")
+    texts.append(f"Contact: {profile.get('contact_number', '')}")
+    texts.append(f"Available: {profile.get('available_spot', '')}")
+    texts.append(f"Location: {profile.get('city', '')}")
     
     # About section
     if profile.get('about'):
         texts.append(f"About: {profile['about']}")
     
-    # Experience
+    # Experience in more detail
     experiences = profile.get('experience', [])
     if experiences:
         texts.append("Experience:")
         for exp in experiences:
-            exp_text = f"- {exp.get('title', '')} at {exp.get('company', '')}"
+            exp_parts = []
+            exp_parts.append(f"- {exp.get('title', '')}")
+            if exp.get('company'):
+                exp_parts.append(f"at {exp.get('company', '')}")
             if exp.get('duration'):
-                exp_text += f" ({exp['duration']})"
-            texts.append(exp_text)
+                exp_parts.append(f"({exp['duration']})")
+            
+            texts.append(" ".join(exp_parts))
+            
+            # Include the description for richer context
+            if exp.get('description'):
+                texts.append(f"  Description: {exp['description']}")
     
-    # Skills
+    # Skills with more details
     skills = profile.get('skills', [])
     if skills:
         texts.append("Skills: " + ", ".join(skills))
     
     # URL reference
     texts.append(f"Source: {profile.get('source_url', '')}")
+    
+    # Note about raw HTML availability (for LLM awareness)
+    if profile.get('raw_html'):
+        texts.append("Note: Raw HTML profile data is available for more detailed information extraction.")
     
     return "\n".join(texts)
 
@@ -369,17 +573,130 @@ Here are the candidate profiles that might match:
 
 Based on the above profiles and the job requirement, please:
 1. Rank the top candidates (maximum 3) who best match the requirements.
-2. For each candidate provide:
+2. DO NOT include any overall summary at the beginning of your response.
+3. For each candidate provide:
    - Name and current job title
    - Match score (1-100%)
    - Brief explanation of why they match the requirements
-   - Key skills relevant to the position
-   - Contact information
+   - Key skills relevant to the position (from both their skills list and experience)
+   - Contact information (phone number from their profile)
+4. ONLY at the end of your response, provide a brief overall summary explaining why these candidates are the best fit.
 
-Overall summary: In 1-2 sentences, explain why these candidates are the best fit for the position.
+IMPORTANT: The profiles provided include full details about each candidate, including:
+- Their job experience (company, title, duration, and description)
+- Their listed skills
+- Contact information
+
+For some profiles, there may also be raw HTML data stored in the "raw_html" field.
+Use all available information to make the best match.
+
+CRITICAL INSTRUCTION: YOU MUST FORMAT YOUR RESPONSE AS JSON. Do not include any text outside the JSON structure.
+
+The exact JSON format to use is:
+```json
+{{
+  "candidates": [
+    {{
+      "profile": {{
+        "name": "Candidate Name",
+        "headline": "Job Title",
+        "contact_number": "Phone Number",
+        "available_spot": "Available Time",
+        "city": "City, State",
+        "source_url": "Profile URL"
+      }},
+      "match_score": 95,
+      "explanation": "Reason why this candidate matches the requirements",
+      "relevant_skills": ["Skill 1", "Skill 2", "Skill 3"]
+    }}
+  ],
+  "summary": "Brief summary explaining why these candidates are the best fit"
+}}
+```
+
+Do not include any markdown formatting or explanatory text outside the JSON. Your entire response should be valid JSON that can be parsed directly.
 """
 
     return ChatPromptTemplate.from_template(template)
+
+def parse_unstructured_response(text: str) -> Dict[str, Any]:
+    """
+    Parse an unstructured response into a dictionary that can be used to create a SearchResponse.
+    This is a fallback when the response is not valid JSON.
+    """
+    candidates = []
+    summary = ""
+    
+    # Clean up the text
+    # More aggressively remove any summary section at the beginning
+    cleaned_text = re.sub(r'^.*?(?:Summary|Overall\s+summary)[:\s].*?\n\n', '', text, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Extract summary - look ONLY for the section at the very end
+    # Look specifically for "Overall summary:" or "Summary:" at the end of the document
+    summary_pattern = r'\n(?:Overall\s+summary|Summary)[:\s]+(.*?)$'
+    summary_match = re.search(summary_pattern, cleaned_text, re.DOTALL | re.IGNORECASE)
+    if summary_match:
+        summary = summary_match.group(1).strip()
+        
+        # Remove the extracted summary from the text to avoid confusion in candidate extraction
+        cleaned_text = cleaned_text[:summary_match.start()]
+    
+    # Extract candidates
+    # This regex looks for numbered candidates with name and title
+    candidate_pattern = r'(?:^|\n)#?(\d+)[\.:\)]\s+([^(]+)(?:\(([^)]+)\))?'
+    candidate_matches = re.finditer(candidate_pattern, cleaned_text)
+    
+    for match in candidate_matches:
+        rank = match.group(1)
+        name = match.group(2).strip() if match.group(2) else "Unknown"
+        title = match.group(3).strip() if match.group(3) else ""
+        
+        # Get the candidate text section - from this match to next candidate or end
+        start_pos = match.end()
+        next_match = re.search(candidate_pattern, cleaned_text[start_pos:])
+        end_pos = (next_match.start() + start_pos) if next_match else len(cleaned_text)
+        candidate_text = cleaned_text[start_pos:end_pos]
+        
+        # Extract match score
+        score_pattern = r'(?:Match\s+score|Score):\s*(\d+)%'
+        score_match = re.search(score_pattern, candidate_text)
+        score = int(score_match.group(1)) if score_match and score_match.group(1).isdigit() else 0
+        
+        # Extract explanation
+        explanation_pattern = r'(?:Explanation|Why|Reason)(?:\s+this\s+candidate\s+matches)?:\s*(.+?)(?:\n\n|\n(?:Key skills|Skills|Contact)|$)'
+        explanation_match = re.search(explanation_pattern, candidate_text, re.DOTALL | re.IGNORECASE)
+        explanation = explanation_match.group(1).strip() if explanation_match else "No explanation provided"
+        
+        # Extract skills
+        skills_pattern = r'(?:Key\s+skills|Skills):\s*(.+?)(?:\n\n|\n(?:Contact|Match|#\d+|$))'
+        skills_match = re.search(skills_pattern, candidate_text, re.DOTALL | re.IGNORECASE)
+        skills_text = skills_match.group(1).strip() if skills_match else ""
+        skills = [s.strip() for s in re.split(r',|\n|\*|\-', skills_text) if s.strip()]
+        
+        # Extract contact
+        contact_pattern = r'Contact(?:\s+information)?:\s*(.+?)(?:\n\n|\n(?:#\d+|\d\.|\Z))'
+        contact_match = re.search(contact_pattern, candidate_text, re.DOTALL | re.IGNORECASE)
+        contact = contact_match.group(1).strip() if contact_match else ""
+        
+        # Create candidate entry
+        candidates.append({
+            "profile": {
+                "name": name,
+                "headline": title,
+                "contact_number": contact,
+                "available_spot": "",
+                "city": "",
+                "source_url": ""
+            },
+            "match_score": score if score > 0 else 50,  # Default to 50% if no score found
+            "explanation": explanation,
+            "relevant_skills": skills
+        })
+    
+    return {
+        "candidates": candidates,
+        "summary": summary
+    }
 
 def create_query_engine(api_key: str):
     """Create the query engine for finding matching candidates"""
@@ -422,7 +739,80 @@ def query_candidates(query: str, api_key: str) -> str:
     # Run the query
     result = engine.invoke(query)
     
-    return result
+    # Try to parse as JSON first
+    try:
+        # Extract JSON portion from the result - the LLM may include text before/after
+        # Find first { and last }
+        json_start = result.find('{')
+        json_end = result.rfind('}') + 1
+        
+        if json_start != -1 and json_end != -1:
+            json_result = result[json_start:json_end]
+            try:
+                parsed_result = json.loads(json_result)
+                logger.info("Successfully parsed JSON response")
+            except json.JSONDecodeError:
+                # Try cleaning up the JSON before parsing
+                import re
+                # Replace any JavaScript comments
+                cleaned_json = re.sub(r'//.*?\n', '', json_result)
+                # Try parsing again
+                try:
+                    parsed_result = json.loads(cleaned_json)
+                    logger.info("Successfully parsed cleaned JSON response")
+                except json.JSONDecodeError:
+                    # If still fails, fall back to unstructured parsing
+                    logger.warning("Failed to parse JSON, falling back to unstructured parsing")
+                    parsed_result = parse_unstructured_response(result)
+        else:
+            # If no JSON-like structure found, use unstructured parsing
+            logger.warning("No JSON structure found, using unstructured parsing")
+            parsed_result = parse_unstructured_response(result)
+            
+        # Create a structured response using Pydantic models
+        candidates = []
+        for candidate in parsed_result.get("candidates", []):
+            # Create Profile instance 
+            profile_data = candidate.get("profile", {})
+            
+            # Create Profile with available data
+            try:
+                profile = Profile(
+                    name=profile_data.get("name", ""),
+                    headline=profile_data.get("headline", ""),
+                    contact_number=profile_data.get("contact_number") or "",
+                    available_spot=profile_data.get("available_spot") or "",
+                    city=profile_data.get("city") or "",
+                    source_url=profile_data.get("source_url") or "",
+                    experience=profile_data.get("experience", []),  # Let the model validator handle this
+                    skills=profile_data.get("skills", []),
+                    about=profile_data.get("about", "")
+                )
+                
+                # Create CandidateMatch
+                candidates.append(CandidateMatch(
+                    profile=profile,
+                    match_score=candidate.get("match_score", 0),
+                    explanation=candidate.get("explanation", ""),
+                    relevant_skills=candidate.get("relevant_skills", [])
+                ))
+            except Exception as e:
+                logger.error(f"Error creating profile from data: {e}")
+                logger.debug(f"Profile data: {profile_data}")
+        
+        # Create SearchResponse
+        search_response = SearchResponse(
+            candidates=candidates,
+            summary=parsed_result.get("summary", "")
+        )
+        
+        # Return a formatted string representation
+        return search_response.to_formatted_response()
+        
+    except Exception as e:
+        logger.error(f"Error processing response: {e}")
+        # If all parsing fails, return the original result
+        return result
 
 ##################
 # HELPER FUNCTIONS

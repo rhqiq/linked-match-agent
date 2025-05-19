@@ -6,6 +6,9 @@ from pathlib import Path
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.schema import HumanMessage
 
+# Import Pydantic models
+from models import Profile, Experience, CandidateMatch, SearchResponse
+
 # Import from consolidated ai_agent module
 from ai_agent import (
     scrape_profiles, 
@@ -13,36 +16,36 @@ from ai_agent import (
     query_candidates,
     check_profiles_data_exists,
     check_vector_db_exists,
+    extract_experience_and_skills,
     DATA_DIR,
     DB_DIR
 )
 
 def setup_argparse():
-    """Set up command line arguments"""
-    parser = argparse.ArgumentParser(
-        description="AI-powered candidate matching system"
-    )
+    """Set up argument parser for the application"""
+    parser = argparse.ArgumentParser(description="AI Austin Recruitment Agent")
     
-    parser.add_argument(
-        "--test-model",
-        action="store_true",
-        help="Test the Gemini model connection"
-    )
+    # Set up subparsers for different commands
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
     
-    parser.add_argument(
-        "--query",
-        type=str,
-        help="Query for matching candidates",
-        default=None
-    )
+    # Create parser for the 'recruiter' command
+    recruiter_parser = subparsers.add_parser("recruiter", help="Run the recruiter agent")
+    recruiter_parser.add_argument("--query", type=str, help="The recruitment query to process")
     
-    parser.add_argument(
-        "--interactive",
-        action="store_true",
-        help="Run in interactive mode to query candidates"
-    )
+    # Create parser for the 'candidate' command
+    candidate_parser = subparsers.add_parser("candidate", help="Run the candidate agent")
+    candidate_parser.add_argument("--name", type=str, help="The candidate's name")
+
+    # Add extract-profiles command
+    extract_parser = subparsers.add_parser("extract-profiles", help="Extract experience and skills from HTML profiles")
     
-    return parser.parse_args()
+    # Add example query command
+    example_parser = subparsers.add_parser("example", help="Run an example query to test the system")
+    
+    # Add rebuild-db command
+    rebuild_parser = subparsers.add_parser("rebuild-db", help="Rebuild the vector database with updated profile information")
+    
+    return parser
 
 def test_gemini_model(api_key):
     """Test the connection to the Gemini model"""
@@ -103,56 +106,113 @@ def interactive_mode(api_key):
 
 def main():
     """Main function to run the AI agent"""
-    logger.info("Starting AI-Austin-Agent")
+    parser = setup_argparse()
+    args = parser.parse_args()
     
-    # Parse command line arguments
-    args = setup_argparse()
-    
-    # Load environment variables from .env file if it exists
+    # Load environment variables
     load_dotenv()
     
-    # Get the API keys from environment variables
-    gemini_api_key = os.getenv("GEMINI_API_KEY", "")
-    
-    if not gemini_api_key:
-        logger.error("GEMINI_API_KEY not found in environment variables")
+    # Get API key
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        print("Error: GEMINI_API_KEY environment variable not found.")
+        print("Please add it to your .env file or environment variables.")
         return
     
-    # Auto mode (default) - detect what needs to be done
-    logger.info("Checking what needs to be done...")
-    
-    # Check if profile data exists
-    has_profiles = check_profiles_data_exists()
-    if not has_profiles:
-        logger.info("Profile data not found. Starting data collection...")
-        scrape_profiles()
-    else:
-        logger.info("Profile data already exists. Skipping collection.")
-    
-    # Check if vector database exists
-    has_vector_db = check_vector_db_exists()
-    if not has_vector_db:
-        logger.info("Vector database not found. Creating database...")
-        create_vector_db(gemini_api_key)
-    else:
-        logger.info("Vector database already exists. Skipping creation.")
-    
-    # Handle different modes
-    if args.test_model:
-        logger.info("Testing Gemini model connection...")
-        test_gemini_model(gemini_api_key)
-    elif args.query:
-        logger.info(f"Processing query: {args.query}")
-        result = query_candidates(args.query, gemini_api_key)
-        print("\nMatching Candidates:\n")
+    if args.command == "recruiter":
+        if not args.query:
+            print("Please provide a recruitment query using --query")
+            return
+        
+        print(f"Processing recruitment query: {args.query}")
+        result = query_candidates(args.query, api_key)
         print(result)
-    elif args.interactive:
-        logger.info("Running in interactive mode")
-        interactive_mode(gemini_api_key)
+        
+    elif args.command == "candidate":
+        if not args.name:
+            print("Please provide a candidate name using --name")
+            return
+        
+        print(f"Processing candidate: {args.name}")
+        # Implementation for candidate lookup would go here
+        print("Candidate lookup not yet implemented")
+    
+    elif args.command == "extract-profiles":
+        print("Extracting experience and skills from HTML profiles...")
+        profiles_updated = extract_experience_and_skills()
+        print(f"Updated {profiles_updated} profiles with experience and skills data")
+    
+    elif args.command == "example":
+        print("Running example query for a DevOps Engineer position...")
+        example_query = """
+        We are looking for a DevOps Engineer with the following qualifications:
+        - 5+ years of experience in DevOps or related field
+        - Strong experience with Kubernetes and container orchestration
+        - Experience with CI/CD pipelines
+        - Knowledge of infrastructure as code (Terraform, CloudFormation)
+        - Experience with cloud platforms (AWS, Azure, or GCP)
+        
+        The candidate should have excellent communication skills and be able to work in a team environment.
+        """
+        
+        # First check if we have profiles and a vector database
+        has_profiles = check_profiles_data_exists()
+        has_vector_db = check_vector_db_exists()
+        
+        if not has_profiles:
+            print("Error: No profile data found. Please run 'extract-profiles' first.")
+            return
+        
+        if not has_vector_db:
+            print("Creating vector database...")
+            create_vector_db(api_key)
+        
+        # Test retrieve one profile for debugging
+        print("\nTesting profile retrieval...")
+        from ai_agent import load_vector_db
+        db = load_vector_db(api_key)
+        docs = db.similarity_search("DevOps Kubernetes", k=1)
+        if docs:
+            print(f"Found profile: {docs[0].metadata.get('name', 'Unknown')}")
+            print(f"Content preview (first 200 chars): {docs[0].page_content[:200]}...")
+        
+        print("\nQuerying for matching candidates...\n")
+        result = query_candidates(example_query, api_key)
+        print(result)
+    
+    elif args.command == "rebuild-db":
+        print("Rebuilding vector database with updated profile information...")
+        
+        # Check for API key
+        if not api_key:
+            print("Error: GEMINI_API_KEY environment variable not found.")
+            return
+        
+        # First check if we have profiles 
+        has_profiles = check_profiles_data_exists()
+        if not has_profiles:
+            print("Error: No profile data found. Please run 'extract-profiles' first.")
+            return
+        
+        # Check if database already exists and remove it
+        import shutil
+        if DB_DIR.exists():
+            print(f"Removing existing database at {DB_DIR}...")
+            shutil.rmtree(DB_DIR)
+            print("Database removed.")
+        
+        # Create directory
+        os.makedirs(DB_DIR, exist_ok=True)
+        
+        # Create new database
+        print("Creating new vector database...")
+        create_vector_db(api_key)
+        print("Vector database rebuilt successfully!")
+    
     else:
-        # If no specific mode is selected, run in interactive mode
-        logger.info("No mode specified, running in interactive mode")
-        interactive_mode(gemini_api_key)
+        # Default to interactive mode
+        print("Starting interactive mode. Use --help for available commands.")
+        interactive_mode(api_key)
 
 if __name__ == "__main__":
     main()
