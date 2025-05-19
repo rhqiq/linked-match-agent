@@ -4,7 +4,6 @@ import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 import time
-import streamlit as st
 from dotenv import load_dotenv
 from loguru import logger
 from pathlib import Path
@@ -844,133 +843,12 @@ def check_vector_db_exists() -> bool:
     
     return db_exists
 
-##################
-# WEB INTERFACE
-##################
-
-def setup_streamlit():
-    """Configure Streamlit"""
-    # Configure logger to not interfere with Streamlit
-    logger.remove()
-    logger.add(lambda msg: None, level="INFO")  # Suppress log output to console
-    
-    # Page configuration
-    st.set_page_config(
-        page_title="AI Candidate Matcher",
-        page_icon="🧑‍💼",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-
-def setup_environment():
-    """Set up the environment, load API keys, and check for data and DB"""
-    # Load environment variables
-    load_dotenv()
-    
-    # Get the API keys from environment variables
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    
-    # Initialize session state
-    if "setup_done" not in st.session_state:
-        st.session_state.setup_done = False
-        st.session_state.api_key = api_key
-        st.session_state.has_profiles = check_profiles_data_exists()
-        st.session_state.has_vector_db = check_vector_db_exists()
-    
-    return st.session_state.api_key, st.session_state.has_profiles, st.session_state.has_vector_db
-
-def initialize_data(api_key):
-    """Initialize data and database if needed"""
-    has_profiles = check_profiles_data_exists()
-    has_vector_db = check_vector_db_exists()
-    
-    # If we don't have profiles, collect them
-    if not has_profiles:
-        with st.spinner("Collecting profile data..."):
-            scrape_profiles()
-        st.success("Profile data collected successfully!")
-        has_profiles = True
-    
-    # If we don't have a vector database, create it
-    if not has_vector_db and has_profiles:
-        with st.spinner("Creating vector database..."):
-            create_vector_db(api_key)
-        st.success("Vector database created successfully!")
-        has_vector_db = True
-    
-    return has_profiles and has_vector_db
-
-def render_sidebar():
-    """Render the sidebar content"""
-    st.sidebar.title("AI Candidate Matcher")
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("""
-    ### About
-    This application uses AI to match job requirements with candidate profiles.
-    
-    It uses:
-    - RAG (Retrieval-Augmented Generation)
-    - LangChain for the retrieval pipeline
-    - Google's Generative AI for embeddings and inference
-    - Chroma as the vector database
-    
-    ### Data Source
-    The candidate data comes from mock LinkedIn profiles created for educational purposes.
-    """)
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### Developer Info")
-    st.sidebar.info("Created with 💖 by AI-Austin-Agent")
-
-def render_api_key_input():
-    """Render the API key input form"""
-    st.warning("⚠️ No Google API key found in environment!")
-    
-    with st.form("api_key_form"):
-        api_key = st.text_input("Enter your Google API key", type="password")
-        submitted = st.form_submit_button("Submit")
-        
-        if submitted and api_key:
-            st.session_state.api_key = api_key
-            st.success("API key saved! Initializing system...")
-            st.rerun()
-
-def run_streamlit_app():
-    """Main function for the Streamlit app"""
-    # Import app.py to use its implementation instead
+# This is the main entry point when running this file directly
+# simply import the app module and delegate to it
+if __name__ == "__main__":
     try:
         import app
         app.main()
-    except ImportError:
-        # Fallback if app.py cannot be imported
-        setup_streamlit()
-        render_sidebar()
-        
-        # Setup environment and check for API key
-        api_key, has_profiles, has_vector_db = setup_environment()
-        
-        # If no API key is found, show API key input form
-        if not api_key:
-            render_api_key_input()
-            return
-        
-        # Initialize data if needed
-        if not (has_profiles and has_vector_db):
-            system_ready = initialize_data(api_key)
-            if not system_ready:
-                st.error("Failed to initialize the system. Please check the logs.")
-                return
-        
-        # Show a message that the app should be run through app.py
-        st.warning("This is a limited version of the app. For the full experience, please run 'streamlit run app.py'")
-        st.info("This module provides the backend functionality only. The interface may be limited.")
-        
-        # Provide a basic search interface
-        query = st.text_area("Job Requirements", height=150)
-        if st.button("Search"):
-            if query:
-                with st.spinner("Searching..."):
-                    result = query_candidates(query, api_key)
-                st.write(result)
-
-if __name__ == "__main__":
-    run_streamlit_app() 
+    except ImportError as e:
+        logger.error(f"Error importing app module: {e}")
+        logger.error("Please ensure app.py exists and is functioning correctly") 

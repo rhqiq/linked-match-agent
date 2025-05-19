@@ -104,6 +104,70 @@ def interactive_mode(api_key):
             logger.error(f"Error processing query: {e}")
             print(f"Sorry, an error occurred: {e}")
 
+def run_command(command, **kwargs):
+    """Run a specific command programmatically
+    
+    Args:
+        command (str): The command to run (e.g., 'extract-profiles', 'rebuild-db')
+        **kwargs: Additional arguments for the command
+    
+    Returns:
+        Any: Result of the command or None
+    """
+    # Load environment variables
+    load_dotenv()
+    
+    # Get API key
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        logger.error("GEMINI_API_KEY environment variable not found.")
+        return None
+    
+    if command == "extract-profiles":
+        logger.info("Extracting experience and skills from HTML profiles...")
+        profiles_updated = extract_experience_and_skills()
+        logger.info(f"Updated {profiles_updated} profiles with experience and skills data")
+        return profiles_updated
+    
+    elif command == "rebuild-db":
+        logger.info("Rebuilding vector database with updated profile information...")
+        
+        # Check for profiles
+        has_profiles = check_profiles_data_exists()
+        if not has_profiles:
+            logger.error("No profile data found. Please run 'extract-profiles' first.")
+            return None
+        
+        # Remove existing database
+        import shutil
+        if DB_DIR.exists():
+            logger.info(f"Removing existing database at {DB_DIR}...")
+            shutil.rmtree(DB_DIR)
+            logger.info("Database removed.")
+        
+        # Create directory
+        os.makedirs(DB_DIR, exist_ok=True)
+        
+        # Create new database
+        logger.info("Creating new vector database...")
+        create_vector_db(api_key)
+        logger.info("Vector database rebuilt successfully!")
+        return True
+    
+    elif command == "query":
+        query = kwargs.get("query", "")
+        if not query:
+            logger.error("No query provided for command 'query'")
+            return None
+        
+        logger.info(f"Processing query: {query}")
+        result = query_candidates(query, api_key)
+        return result
+    
+    else:
+        logger.error(f"Unknown command: {command}")
+        return None
+
 def main():
     """Main function to run the AI agent"""
     parser = setup_argparse()
@@ -215,4 +279,11 @@ def main():
         interactive_mode(api_key)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.error(f"An error occurred: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        print(f"\nError: {e}")
+        print("For more details, check the error logs.")

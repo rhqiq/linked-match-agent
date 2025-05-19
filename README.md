@@ -124,6 +124,34 @@ python main.py --test-model
 5. **Analyze Results**: Review the ranked candidates with match explanations
 6. **Debug If Needed**: Toggle debug mode in the sidebar to see raw AI responses
 
+### Rebuilding the Database or Regenerating Data
+
+The application offers command-line options to rebuild the database or regenerate profile data:
+
+1. **Extract Experience and Skills from Profiles**:
+   ```bash
+   python main.py extract-profiles
+   ```
+   This command will read the HTML profiles and extract structured experience and skills data, updating the JSON files.
+
+2. **Rebuild the Vector Database**:
+   ```bash
+   python main.py rebuild-db
+   ```
+   This command will remove the existing vector database and rebuild it from scratch using the current profile data.
+
+3. **Run an Example Query** to test the system:
+   ```bash
+   python main.py example
+   ```
+   This command runs a sample query for a DevOps Engineer position to test if the system is working correctly.
+
+4. **Interactive Mode** (default when running without args):
+   ```bash
+   python main.py
+   ```
+   This starts an interactive session where you can enter multiple queries.
+
 ## Project Structure
 
 ```
