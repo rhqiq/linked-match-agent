@@ -154,10 +154,14 @@ def parse_candidate_results(result_text):
                 skills_list = [s.strip() for s in re.split(r',|\n|•|-', skills_text) if s.strip()]
                 
                 # Extract contact info - look for anything after "contact" until the end or next section
-                contact_pattern = r'contact(?:\s+information)?:\s*(.*?)(?=\n\s*(?:key skill|skill|match score|explanation|why)|$)'
+                # Make sure we don't capture SUMMARY text in the contact information
+                contact_pattern = r'contact(?:\s+information)?:\s*(.*?)(?=\n\s*(?:key skill|skill|match score|explanation|why|summary|SUMMARY:)|\n\n|\Z)'
                 contact_match = re.search(contact_pattern, section_text, re.IGNORECASE | re.DOTALL)
                 contact = contact_match.group(1).strip() if contact_match else "No contact information available"
                 contact = re.sub(r'\n+', ' ', contact)  # Clean up newlines
+                
+                # Clean up contact info - remove any SUMMARY text that might have been captured
+                contact = re.sub(r'(?i)SUMMARY:.*$', '', contact).strip()
                 
                 # Add to candidates list
                 candidates.append({
@@ -215,9 +219,14 @@ def parse_candidate_results(result_text):
                 skills_text = re.sub(r'\n+', ' ', skills_text)
                 skills_list = [s.strip() for s in re.split(r',|\n|•|-', skills_text) if s.strip()]
                 
+                # Updated pattern to avoid capturing SUMMARY text in the contact information
+                contact_pattern = r'Contact(?:\s+information)?:\s*([^\n]+(?:\n[^\n]+)*?)(?:\n\n|\n(?=[A-Z]|[0-9]|Summary|SUMMARY)|\Z)'
                 contact_match = re.search(contact_pattern, candidate_text)
                 contact = contact_match.group(1).strip() if contact_match else "No contact information available"
                 contact = re.sub(r'\n+', ' ', contact)
+                
+                # Clean up contact info - remove any SUMMARY text that might have been captured
+                contact = re.sub(r'(?i)SUMMARY:.*$', '', contact).strip()
                 
                 # Add to candidates list
                 candidates.append({
@@ -239,7 +248,8 @@ def parse_candidate_results(result_text):
     # Extract summary if present
     summary = ""
     try:
-        summary_pattern = r'(?:Overall summary|In summary|Summary):\s*([^\n]+(?:\n[^\n]+)*?)(?:\n\n|\Z)'
+        # Look for various summary formats, including the new SUMMARY format
+        summary_pattern = r'(?:Overall summary|In summary|Summary|SUMMARY):\s*([^\n]+(?:\n[^\n]+)*?)(?:\n\n|\Z)'
         summary_match = re.search(summary_pattern, result_text, re.IGNORECASE)
         if summary_match:
             summary = summary_match.group(1).strip()
@@ -503,16 +513,28 @@ DO NOT include any HTML tags, markdown formatting, or additional text. Stick str
         # Clean any HTML tags from the result that might cause rendering issues
         cleaned_result = re.sub(r'<[^>]*>', '', st.session_state.current_result)
         
-        st.markdown("### 🏆 Matching Candidates")
-        
         # Parse and display results
         candidates, summary = parse_candidate_results(cleaned_result)
+        
+        # Remove the SUMMARY section from the end of the result before displaying
+        # This prevents the summary from appearing after the last contact
+        cleaned_for_display = re.sub(r'\nSUMMARY:.*$', '', cleaned_result, flags=re.IGNORECASE | re.DOTALL)
+        
+        # If we got no candidates from the original parse, try parsing the cleaned version
+        if not candidates:
+            candidates, _ = parse_candidate_results(cleaned_for_display)
+            
+        st.markdown("### 🏆 Matching Candidates")
         
         if candidates:
             # Show summary first if available
             if summary:
                 st.markdown("#### Summary")
                 st.info(summary)
+            else:
+                # Debug information if no summary was found
+                if st.session_state.debug_mode:
+                    st.warning("No summary was extracted from the response.")
             
             # Display each candidate as a card
             for candidate in candidates:
@@ -522,11 +544,13 @@ DO NOT include any HTML tags, markdown formatting, or additional text. Stick str
             if st.session_state.debug_mode:
                 with st.expander("Raw AI Response"):
                     st.code(cleaned_result, language="text")
+                with st.expander("Cleaned AI Response (without summary)"):
+                    st.code(cleaned_for_display, language="text")
         else:
             # Fall back to displaying raw results if parsing fails
             st.warning("The AI response couldn't be parsed into the structured format. Displaying raw results instead.")
             # Use write instead of markdown for safer rendering of plain text
-            st.write(cleaned_result)
+            st.write(cleaned_for_display)
             if st.session_state.debug_mode:
                 with st.expander("Raw AI Response"):
                     st.code(cleaned_result, language="text")

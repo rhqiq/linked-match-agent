@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from loguru import logger
 from pathlib import Path
 from typing import List, Dict, Any
+import re
 
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
@@ -17,6 +18,9 @@ from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
 from langchain.schema.document import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+# Import Pydantic models
+from models import Profile, Experience, CandidateMatch, SearchResponse
 
 # Create data directories if they don't exist
 DATA_DIR = Path("data")
@@ -415,22 +419,33 @@ def process_profile_to_text(profile: Dict[Any, Any]) -> str:
     # Basic information
     texts.append(f"Name: {profile.get('name', 'Unknown')}")
     texts.append(f"Title: {profile.get('headline', 'Unknown')}")
+    texts.append(f"Contact: {profile.get('contact_number', '')}")
+    texts.append(f"Available: {profile.get('available_spot', '')}")
+    texts.append(f"Location: {profile.get('city', '')}")
     
     # About section
     if profile.get('about'):
         texts.append(f"About: {profile['about']}")
     
-    # Experience
+    # Experience in more detail
     experiences = profile.get('experience', [])
     if experiences:
         texts.append("Experience:")
         for exp in experiences:
-            exp_text = f"- {exp.get('title', '')} at {exp.get('company', '')}"
+            exp_parts = []
+            exp_parts.append(f"- {exp.get('title', '')}")
+            if exp.get('company'):
+                exp_parts.append(f"at {exp.get('company', '')}")
             if exp.get('duration'):
-                exp_text += f" ({exp['duration']})"
-            texts.append(exp_text)
+                exp_parts.append(f"({exp['duration']})")
+            
+            texts.append(" ".join(exp_parts))
+            
+            # Include the description for richer context
+            if exp.get('description'):
+                texts.append(f"  Description: {exp['description']}")
     
-    # Skills
+    # Skills with more details
     skills = profile.get('skills', [])
     if skills:
         texts.append("Skills: " + ", ".join(skills))
@@ -558,21 +573,130 @@ Here are the candidate profiles that might match:
 
 Based on the above profiles and the job requirement, please:
 1. Rank the top candidates (maximum 3) who best match the requirements.
-2. For each candidate provide:
+2. DO NOT include any overall summary at the beginning of your response.
+3. For each candidate provide:
    - Name and current job title
    - Match score (1-100%)
    - Brief explanation of why they match the requirements
-   - Key skills relevant to the position
-   - Contact information
+   - Key skills relevant to the position (from both their skills list and experience)
+   - Contact information (phone number from their profile)
+4. ONLY at the end of your response, provide a brief overall summary explaining why these candidates are the best fit.
 
-If you need more detailed information about a candidate that isn't visible in their profile summary,
-you can analyze their raw HTML profile which is stored in the system. Just note which aspects need
-more detailed extraction.
+IMPORTANT: The profiles provided include full details about each candidate, including:
+- Their job experience (company, title, duration, and description)
+- Their listed skills
+- Contact information
 
-Overall summary: In 1-2 sentences, explain why these candidates are the best fit for the position.
+For some profiles, there may also be raw HTML data stored in the "raw_html" field.
+Use all available information to make the best match.
+
+CRITICAL INSTRUCTION: YOU MUST FORMAT YOUR RESPONSE AS JSON. Do not include any text outside the JSON structure.
+
+The exact JSON format to use is:
+```json
+{{
+  "candidates": [
+    {{
+      "profile": {{
+        "name": "Candidate Name",
+        "headline": "Job Title",
+        "contact_number": "Phone Number",
+        "available_spot": "Available Time",
+        "city": "City, State",
+        "source_url": "Profile URL"
+      }},
+      "match_score": 95,
+      "explanation": "Reason why this candidate matches the requirements",
+      "relevant_skills": ["Skill 1", "Skill 2", "Skill 3"]
+    }}
+  ],
+  "summary": "Brief summary explaining why these candidates are the best fit"
+}}
+```
+
+Do not include any markdown formatting or explanatory text outside the JSON. Your entire response should be valid JSON that can be parsed directly.
 """
 
     return ChatPromptTemplate.from_template(template)
+
+def parse_unstructured_response(text: str) -> Dict[str, Any]:
+    """
+    Parse an unstructured response into a dictionary that can be used to create a SearchResponse.
+    This is a fallback when the response is not valid JSON.
+    """
+    candidates = []
+    summary = ""
+    
+    # Clean up the text
+    # More aggressively remove any summary section at the beginning
+    cleaned_text = re.sub(r'^.*?(?:Summary|Overall\s+summary)[:\s].*?\n\n', '', text, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Extract summary - look ONLY for the section at the very end
+    # Look specifically for "Overall summary:" or "Summary:" at the end of the document
+    summary_pattern = r'\n(?:Overall\s+summary|Summary)[:\s]+(.*?)$'
+    summary_match = re.search(summary_pattern, cleaned_text, re.DOTALL | re.IGNORECASE)
+    if summary_match:
+        summary = summary_match.group(1).strip()
+        
+        # Remove the extracted summary from the text to avoid confusion in candidate extraction
+        cleaned_text = cleaned_text[:summary_match.start()]
+    
+    # Extract candidates
+    # This regex looks for numbered candidates with name and title
+    candidate_pattern = r'(?:^|\n)#?(\d+)[\.:\)]\s+([^(]+)(?:\(([^)]+)\))?'
+    candidate_matches = re.finditer(candidate_pattern, cleaned_text)
+    
+    for match in candidate_matches:
+        rank = match.group(1)
+        name = match.group(2).strip() if match.group(2) else "Unknown"
+        title = match.group(3).strip() if match.group(3) else ""
+        
+        # Get the candidate text section - from this match to next candidate or end
+        start_pos = match.end()
+        next_match = re.search(candidate_pattern, cleaned_text[start_pos:])
+        end_pos = (next_match.start() + start_pos) if next_match else len(cleaned_text)
+        candidate_text = cleaned_text[start_pos:end_pos]
+        
+        # Extract match score
+        score_pattern = r'(?:Match\s+score|Score):\s*(\d+)%'
+        score_match = re.search(score_pattern, candidate_text)
+        score = int(score_match.group(1)) if score_match and score_match.group(1).isdigit() else 0
+        
+        # Extract explanation
+        explanation_pattern = r'(?:Explanation|Why|Reason)(?:\s+this\s+candidate\s+matches)?:\s*(.+?)(?:\n\n|\n(?:Key skills|Skills|Contact)|$)'
+        explanation_match = re.search(explanation_pattern, candidate_text, re.DOTALL | re.IGNORECASE)
+        explanation = explanation_match.group(1).strip() if explanation_match else "No explanation provided"
+        
+        # Extract skills
+        skills_pattern = r'(?:Key\s+skills|Skills):\s*(.+?)(?:\n\n|\n(?:Contact|Match|#\d+|$))'
+        skills_match = re.search(skills_pattern, candidate_text, re.DOTALL | re.IGNORECASE)
+        skills_text = skills_match.group(1).strip() if skills_match else ""
+        skills = [s.strip() for s in re.split(r',|\n|\*|\-', skills_text) if s.strip()]
+        
+        # Extract contact
+        contact_pattern = r'Contact(?:\s+information)?:\s*(.+?)(?:\n\n|\n(?:#\d+|\d\.|\Z))'
+        contact_match = re.search(contact_pattern, candidate_text, re.DOTALL | re.IGNORECASE)
+        contact = contact_match.group(1).strip() if contact_match else ""
+        
+        # Create candidate entry
+        candidates.append({
+            "profile": {
+                "name": name,
+                "headline": title,
+                "contact_number": contact,
+                "available_spot": "",
+                "city": "",
+                "source_url": ""
+            },
+            "match_score": score if score > 0 else 50,  # Default to 50% if no score found
+            "explanation": explanation,
+            "relevant_skills": skills
+        })
+    
+    return {
+        "candidates": candidates,
+        "summary": summary
+    }
 
 def create_query_engine(api_key: str):
     """Create the query engine for finding matching candidates"""
@@ -615,7 +739,80 @@ def query_candidates(query: str, api_key: str) -> str:
     # Run the query
     result = engine.invoke(query)
     
-    return result
+    # Try to parse as JSON first
+    try:
+        # Extract JSON portion from the result - the LLM may include text before/after
+        # Find first { and last }
+        json_start = result.find('{')
+        json_end = result.rfind('}') + 1
+        
+        if json_start != -1 and json_end != -1:
+            json_result = result[json_start:json_end]
+            try:
+                parsed_result = json.loads(json_result)
+                logger.info("Successfully parsed JSON response")
+            except json.JSONDecodeError:
+                # Try cleaning up the JSON before parsing
+                import re
+                # Replace any JavaScript comments
+                cleaned_json = re.sub(r'//.*?\n', '', json_result)
+                # Try parsing again
+                try:
+                    parsed_result = json.loads(cleaned_json)
+                    logger.info("Successfully parsed cleaned JSON response")
+                except json.JSONDecodeError:
+                    # If still fails, fall back to unstructured parsing
+                    logger.warning("Failed to parse JSON, falling back to unstructured parsing")
+                    parsed_result = parse_unstructured_response(result)
+        else:
+            # If no JSON-like structure found, use unstructured parsing
+            logger.warning("No JSON structure found, using unstructured parsing")
+            parsed_result = parse_unstructured_response(result)
+            
+        # Create a structured response using Pydantic models
+        candidates = []
+        for candidate in parsed_result.get("candidates", []):
+            # Create Profile instance 
+            profile_data = candidate.get("profile", {})
+            
+            # Create Profile with available data
+            try:
+                profile = Profile(
+                    name=profile_data.get("name", ""),
+                    headline=profile_data.get("headline", ""),
+                    contact_number=profile_data.get("contact_number") or "",
+                    available_spot=profile_data.get("available_spot") or "",
+                    city=profile_data.get("city") or "",
+                    source_url=profile_data.get("source_url") or "",
+                    experience=profile_data.get("experience", []),  # Let the model validator handle this
+                    skills=profile_data.get("skills", []),
+                    about=profile_data.get("about", "")
+                )
+                
+                # Create CandidateMatch
+                candidates.append(CandidateMatch(
+                    profile=profile,
+                    match_score=candidate.get("match_score", 0),
+                    explanation=candidate.get("explanation", ""),
+                    relevant_skills=candidate.get("relevant_skills", [])
+                ))
+            except Exception as e:
+                logger.error(f"Error creating profile from data: {e}")
+                logger.debug(f"Profile data: {profile_data}")
+        
+        # Create SearchResponse
+        search_response = SearchResponse(
+            candidates=candidates,
+            summary=parsed_result.get("summary", "")
+        )
+        
+        # Return a formatted string representation
+        return search_response.to_formatted_response()
+        
+    except Exception as e:
+        logger.error(f"Error processing response: {e}")
+        # If all parsing fails, return the original result
+        return result
 
 ##################
 # HELPER FUNCTIONS
