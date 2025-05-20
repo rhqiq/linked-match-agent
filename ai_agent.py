@@ -575,10 +575,11 @@ Based on the above profiles and the job requirement, please:
 2. DO NOT include any overall summary at the beginning of your response.
 3. For each candidate provide:
    - Name and current job title
-   - Match score (1-100%)
+   - Match score (1-10)
    - Brief explanation of why they match the requirements
    - Key skills relevant to the position (from both their skills list and experience)
    - Contact information (phone number from their profile)
+   - Explain why is a good match
 4. ONLY at the end of your response, provide a brief overall summary explaining why these candidates are the best fit.
 
 IMPORTANT: The profiles provided include full details about each candidate, including:
@@ -605,7 +606,7 @@ The exact JSON format to use is:
         "source_url": "Profile URL"
       }},
       "match_score": 95,
-      "explanation": "Reason why this candidate matches the requirements",
+      "explanation": "Explain the reason why this candidate matches the requirements",
       "relevant_skills": ["Skill 1", "Skill 2", "Skill 3"]
     }}
   ],
